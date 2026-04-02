@@ -1,270 +1,141 @@
-import json, csv, re
+import streamlit as st
+import json
 from datetime import datetime
-import tkinter as tk
-from tkinter import messagebox, filedialog, ttk
+import sys
+import os
 
-# --- VARIABLE TYPES ---
-version_float: float     = 1.3
-allowed_ext:   set       = {".json"}
-used_files:    set       = set()
-debug_mode:    bool      = False
-valid_score_range: range = range(0, 61)
-required_fields: frozenset = frozenset({"name", "surname", "dob", "student_id"})
-NAME_PATTERN: re.Pattern = re.compile(r"^[A-Za-zА-Яа-яЁё\s'\-]{2,}$")  # regex: letters only
+# ---------------- DATA ----------------
+version_float = 1.1
 
-# --- QUESTIONS ---
 questions = [
-    {"q": "How often do you plan your day in advance using a schedule?",
-     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How frequently do you divide your day into specific time blocks?",
-     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How often do you complete tasks within their assigned time blocks?",
-     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How often do distractions interrupt your scheduled activities?",
+    {"q": "How often do you feel overwhelmed by your responsibilities?",
      "opts": [("Never",0),("Rarely",1),("Sometimes",2),("Often",3),("Always",4)]},
-    {"q": "How effectively do you prioritise tasks before scheduling them?",
-     "opts": [("Very effectively",0),("Effectively",1),("Moderately",2),("Slightly",3),("Not at all",4)]},
-    {"q": "How often do you adjust your schedule when unexpected events occur?",
-     "opts": [("Always effectively",0),("Often effectively",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How often do you allocate specific time for breaks between tasks?",
-     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How often do you follow your daily schedule as planned?",
-     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How often do you set clear goals for each time block?",
-     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How often do you feel that your schedule helps you stay productive?",
-     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How often do you postpone or skip scheduled tasks?",
+    {"q": "How well do you sleep at night?",
+     "opts": [("Very well",0),("Fairly well",1),("Occasionally restless",2),("Often restless",3),("Very poorly",4)]},
+    {"q": "How often do you feel anxious about your academic performance?",
      "opts": [("Never",0),("Rarely",1),("Sometimes",2),("Often",3),("Always",4)]},
-    {"q": "How often do you review your schedule at the end of the day?",
-     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How often do you dedicate uninterrupted time for focused work?",
-     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]},
-    {"q": "How often do you overestimate or underestimate time needed for tasks?",
+    {"q": "How would you rate your ability to concentrate on studies?",
+     "opts": [("Excellent",0),("Good",1),("Fair",2),("Poor",3),("Very poor",4)]},
+    {"q": "How often do you feel isolated from peers?",
      "opts": [("Never",0),("Rarely",1),("Sometimes",2),("Often",3),("Always",4)]},
-    {"q": "How often do you feel stressed due to poor time management?",
+    {"q": "How satisfied are you with your social life?",
+     "opts": [("Very satisfied",0),("Satisfied",1),("Neutral",2),("Dissatisfied",3),("Very dissatisfied",4)]},
+    {"q": "How often do you experience physical symptoms of stress (headaches, fatigue)?",
      "opts": [("Never",0),("Rarely",1),("Sometimes",2),("Often",3),("Always",4)]},
+    {"q": "How well do you manage your time?",
+     "opts": [("Very well",0),("Well",1),("Adequately",2),("Poorly",3),("Very poorly",4)]},
+    {"q": "How often do you feel pressure to meet deadlines?",
+     "opts": [("Never",0),("Rarely",1),("Sometimes",2),("Often",3),("Always",4)]},
+    {"q": "How would you rate your overall mental well-being?",
+     "opts": [("Excellent",0),("Good",1),("Fair",2),("Poor",3),("Very poor",4)]},
+    {"q": "How often do you engage in relaxation activities?",
+     "opts": [("Daily",0),("Several times a week",1),("Weekly",2),("Rarely",3),("Never",4)]},
+    {"q": "How supported do you feel by your instructors?",
+     "opts": [("Very supported",0),("Supported",1),("Neutral",2),("Unsupported",3),("Very unsupported",4)]},
+    {"q": "How often do you worry about your future career?",
+     "opts": [("Never",0),("Rarely",1),("Sometimes",2),("Often",3),("Always",4)]},
+    {"q": "How would you rate your financial stress level?",
+     "opts": [("None",0),("Mild",1),("Moderate",2),("High",3),("Severe",4)]},
+    {"q": "How often do you feel optimistic about your academic journey?",
+     "opts": [("Always",0),("Often",1),("Sometimes",2),("Rarely",3),("Never",4)]}
 ]
 
-# --- SCORING STATES ---
-states = {
-    "Expert Time Blocker":         (0,  8),
-    "High Time Blocking Use":      (9,  15),
-    "Good Schedule Effectiveness": (16, 25),
-    "Moderate Technique":          (26, 35),
-    "Developing Skills":           (36, 45),
-    "Low Effectiveness":           (46, 60),
+psych_states = {
+    "Very Low Stress": (0, 15),
+    "Low Stress": (16, 30),
+    "Moderate Stress": (31, 45),
+    "High Stress": (46, 60),
+    "Very High Stress": (61, 75),
+    "Severe Stress": (76, 90),
+    "Critical State": (91, 200)
 }
 
-# --- VALIDATION ---
+# ---------------- HELPERS ----------------
 def validate_name(name: str) -> bool:
-    name = name.strip()
-    if not NAME_PATTERN.match(name):   # regex check
-        return False
-    i, is_valid = 0, True              # bool
-    while i < len(name):               # while loop — no digits allowed
-        if name[i].isdigit(): is_valid = False; break
-        i += 1
-    return is_valid
+    return len(name.strip()) > 0 and not any(c.isdigit() for c in name)
 
 def validate_dob(dob: str) -> bool:
-    try: datetime.strptime(dob, "%Y-%m-%d"); return True
-    except ValueError: return False
-
-def validate_sid(sid: str) -> bool:
-    if len(sid) < 4: return False
-    for ch in sid:                     # for loop — digits only
-        if not ch.isdigit(): return False
-    return True
+    try:
+        datetime.strptime(dob, "%Y-%m-%d")
+        return True
+    except:
+        return False
 
 def interpret_score(score: int) -> str:
-    if score not in valid_score_range: return "Out of Range"  # range check
-    for state, (lo, hi) in states.items():
-        if lo <= score <= hi: return state
+    for state, (low, high) in psych_states.items():
+        if low <= score <= high:
+            return state
     return "Unknown"
 
-def get_recommendation(score: int) -> str:
-    if score <= 8:  return "Outstanding! Expert-level time blocking skills."
-    if score <= 15: return "Excellent! Keep up your effective scheduling habits."
-    if score <= 25: return "Good effectiveness. Look for small improvements."
-    if score <= 35: return "Moderate. Refine your time blocks and cut distractions."
-    if score <= 45: return "Developing. Try to be more consistent with time blocks."
-    return "Low effectiveness. Start structured daily scheduling now."
-
-# --- SAVE FUNCTIONS ---
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
+def save_json(filename: str, data: dict):
+    with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
-def save_csv(path, rec):
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["name","surname","dob","student_id","total_score","result"])
-        w.writerow([rec["name"],rec["surname"],rec["dob"],rec["student_id"],rec["total_score"],rec["result"]])
-        w.writerow([])
-        w.writerow(["#","question","answer","score"])
-        for i, a in enumerate(rec["answers"], 1):
-            w.writerow([i, a["question"], a["selected_option"], a["score"]])
+# ---------------- STREAMLIT APP ----------------
+st.set_page_config(page_title="Student Psychological Survey")
+st.title("📝 Student Psychological Survey")
 
-def save_txt(path, rec):
-    lines = ["="*50, "  TIME BLOCKING SURVEY REPORT", "="*50,
-             f"  Name  : {rec['name']} {rec['surname']}",
-             f"  DOB   : {rec['dob']}",
-             f"  ID    : {rec['student_id']}",
-             "-"*50,
-             f"  Score : {rec['total_score']} / 60",
-             f"  Result: {rec['result']}",
-             f"  Note  : {rec['recommendation']}",
-             "="*50, "  ANSWERS", "-"*50]
-    for i, a in enumerate(rec["answers"], 1):   # for loop — write each answer
-        lines.append(f"  Q{i:02d}. {a['question']}")
-        lines.append(f"       → {a['selected_option']} (score: {a['score']})")
-    lines.append("="*50)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+st.info("Please fill out your details and answer all questions honestly.")
 
-# --- APP ---
-class SurveyApp:
-    def __init__(self, root):
-        self.root = root
-        root.title("Time Blocking Survey")
-        root.geometry("520x500")
-        self.completed: bool = False    # bool — tracks if survey is done
-        self.main_menu()
+# --- User Info ---
+name = st.text_input("Given Name")
+surname = st.text_input("Surname")
+dob = st.text_input("Date of Birth (YYYY-MM-DD)")
+sid = st.text_input("Student ID (digits only)")
 
-    def clear(self):
-        for w in self.root.winfo_children(): w.destroy()
+# --- Start Survey ---
+if st.button("Start Survey"):
 
-    def main_menu(self):
-        self.clear()
-        self.completed = False
-        tk.Label(self.root, text="Time Blocking Survey", font=("Arial",16,"bold")).pack(pady=15)
-        for txt, cmd in [
-            ("1. Load existing result",          self.load_file),
-            ("2. Start new questionnaire",       self.start_new),
-            ("3. Load questions from file",      self.load_questions),
-            ("4. Save questions + states",       self.save_questions),
-        ]:
-            tk.Button(self.root, text=txt, width=40, command=cmd).pack(pady=5)
+    # Validate inputs
+    errors = []
+    if not validate_name(name):
+        errors.append("Invalid given name.")
+    if not validate_name(surname):
+        errors.append("Invalid surname.")
+    if not validate_dob(dob):
+        errors.append("Invalid date of birth format. Use YYYY-MM-DD.")
+    if not sid.isdigit():
+        errors.append("Student ID must be digits only.")
 
-    def load_file(self):
-        path = filedialog.askopenfilename(filetypes=[("JSON","*.json")])
-        if not path: return
-        if "." + path.rsplit(".",1)[-1] not in allowed_ext:   # set check
-            return messagebox.showerror("Error","Only .json files allowed.")
-        try:
-            data = json.load(open(path, encoding="utf-8"))
-            used_files.add(path)                               # set tracking
-            self.clear()
-            tk.Label(self.root, text="Loaded Result", font=("Arial",14,"bold")).pack(pady=10)
-            info = "\n".join([f"Name: {data.get('name','')} {data.get('surname','')}",
-                              f"DOB: {data.get('dob','')}", f"ID: {data.get('student_id','')}",
-                              f"Score: {data.get('total_score','')}  |  Result: {data.get('result','')}",
-                              f"\n{data.get('recommendation','')}"])
-            tk.Label(self.root, text=info, justify="left", wraplength=470).pack(pady=10, padx=20)
-            tk.Button(self.root, text="Back", command=self.main_menu).pack(pady=8)
-        except: messagebox.showerror("Error","Could not read file.")
+    if errors:
+        for e in errors:
+            st.error(e)
+    else:
+        st.success("All inputs are valid. Proceed to answer the questions below.")
 
-    def save_questions(self):
-        save_json("survey_questions_and_states.json", {"questions": questions, "states": states})
-        messagebox.showinfo("Saved","Saved to survey_questions_and_states.json")
+        total_score = 0
+        answers = []
 
-    def start_new(self):
-        self.qs = questions; self.show_form()
+        for idx, q in enumerate(questions):
+            opt_labels = [opt[0] for opt in q["opts"]]
+            choice = st.selectbox(f"Q{idx+1}. {q['q']}", opt_labels, key=f"q{idx}")
+            score = next(score for label, score in q["opts"] if label == choice)
+            total_score += score
+            answers.append({
+                "question": q["q"],
+                "selected_option": choice,
+                "score": score
+            })
 
-    def load_questions(self):
-        path = filedialog.askopenfilename(filetypes=[("JSON","*.json")])
-        if not path: return
-        try: self.qs = json.load(open(path, encoding="utf-8"))
-        except: return messagebox.showerror("Error","Invalid question file.")
-        self.show_form()
+        status = interpret_score(total_score)
 
-    def show_form(self):
-        self.clear()
-        tk.Label(self.root, text="Your Details", font=("Arial",14,"bold")).pack(pady=10)
-        self.v = {k: tk.StringVar() for k in ["name","surname","dob","sid"]}
-        for lbl, key in [("Given Name:","name"),("Surname:","surname"),
-                         ("Date of Birth (YYYY-MM-DD):","dob"),("Student ID (min 4 digits):","sid")]:
-            f = tk.Frame(self.root); f.pack(pady=3)
-            tk.Label(f, text=lbl, width=26, anchor="w").pack(side="left")
-            tk.Entry(f, textvariable=self.v[key], width=22).pack(side="left")
-        tk.Button(self.root, text="Start Survey", command=self.submit_form,
-                  bg="#4CAF50", fg="white").pack(pady=12)
+        st.markdown(f"## ✅ Your Result: {status}")
+        st.markdown(f"**Total Score:** {total_score}")
 
-    def submit_form(self):
-        n, s, d, sid = (self.v[k].get().strip() for k in ["name","surname","dob","sid"])
-        errs = []
-        if not validate_name(n):   errs.append("• Name: letters only, min 2 chars.")
-        if not validate_name(s):   errs.append("• Surname: letters only, min 2 chars.")
-        if not validate_dob(d):    errs.append("• DOB must be YYYY-MM-DD.")
-        if not validate_sid(sid):  errs.append("• Student ID: min 4 digits.")
-        if errs: return messagebox.showerror("Errors", "\n".join(errs))
+        # Save results to JSON
+        record = {
+            "name": name,
+            "surname": surname,
+            "dob": dob,
+            "student_id": sid,
+            "total_score": total_score,
+            "result": status,
+            "answers": answers,
+            "version": version_float
+        }
 
-        self.rec = {"name":n,"surname":s,"dob":d,"student_id":sid,"version":version_float}
-        if not required_fields.issubset(frozenset(self.rec)):  # frozenset check
-            return messagebox.showerror("Error","Missing fields.")
+        json_filename = f"{sid}_result.json"
+        save_json(json_filename, record)
 
-        self.idx, self.score, self.answers = 0, 0, []
-        self.show_q()
-
-    def show_q(self):
-        self.clear()
-        q, total = self.qs[self.idx], len(self.qs)
-        tk.Label(self.root, text=f"Question {self.idx+1} of {total}", font=("Arial",13,"bold")).pack(pady=8)
-        ttk.Progressbar(self.root, length=420, maximum=total, value=self.idx).pack(pady=3)
-        tk.Label(self.root, text=q["q"], wraplength=470, font=("Arial",11)).pack(pady=10, padx=20)
-        self.sel = tk.IntVar(value=-1)
-        for i, (txt, _) in enumerate(q["opts"], 1):
-            tk.Radiobutton(self.root, text=txt, variable=self.sel, value=i).pack(anchor="w", padx=40)
-        tk.Button(self.root, text="Next →", command=self.next_q,
-                  bg="#2196F3", fg="white").pack(pady=12)
-
-    def next_q(self):
-        if self.sel.get() == -1: return messagebox.showerror("Error","Please select an option.")
-        txt, pts = self.qs[self.idx]["opts"][self.sel.get()-1]
-        self.score += pts
-        self.answers.append({"question": self.qs[self.idx]["q"], "selected_option": txt, "score": pts})
-        self.idx += 1
-        self.finish() if self.idx >= len(self.qs) else self.show_q()
-
-    def finish(self):
-        self.completed = True               # bool flag
-        result = interpret_score(self.score)
-        rec    = self.rec
-        rec.update({"total_score": self.score, "result": result,
-                    "recommendation": get_recommendation(self.score), "answers": self.answers})
-        self.clear()
-        tk.Label(self.root, text="Survey Completed!", font=("Arial",16,"bold")).pack(pady=10)
-        tk.Label(self.root, text=f"Score: {self.score} / 60",  font=("Arial",12)).pack(pady=3)
-        tk.Label(self.root, text=f"Result: {result}", font=("Arial",12,"bold"), fg="#1565C0").pack(pady=3)
-        tk.Label(self.root, text=rec["recommendation"], wraplength=470, fg="#555").pack(pady=6, padx=20)
-
-        # Score legend
-        frame = tk.LabelFrame(self.root, text="Score Guide", padx=6, pady=3)
-        frame.pack(pady=5, padx=30, fill="x")
-        for (st,(lo,hi)), icon in zip(states.items(), ["🏆","✅","👍","⚠️","📌","🚨"]):
-            marker = "  ◀ YOU" if st == result else ""
-            tk.Label(frame, text=f"{icon} {lo}–{hi}: {st}{marker}",
-                     fg="#1565C0" if marker else "#444", anchor="w").pack(fill="x")
-
-        # Save buttons
-        bf = tk.Frame(self.root); bf.pack(pady=8)
-        for txt, fmt, col in [("💾 JSON","json","#4CAF50"),("📊 CSV","csv","#1976D2"),("📄 TXT","txt","#6A1B9A")]:
-            tk.Button(bf, text=txt, command=lambda f=fmt: self.save(f),
-                      bg=col, fg="white", width=11).pack(side="left", padx=4)
-        tk.Button(self.root, text="← Menu", command=self.main_menu).pack(pady=3)
-
-    def save(self, fmt):
-        if not self.completed: return messagebox.showwarning("Warning","No survey to save.")
-        fmts = {"json":("JSON","*.json",".json"), "csv":("CSV","*.csv",".csv"), "txt":("Text","*.txt",".txt")}
-        desc, pat, ext = fmts[fmt]
-        path = filedialog.asksaveasfilename(defaultextension=ext, filetypes=[(desc,pat)])
-        if not path: return
-        {"json": save_json, "csv": save_csv, "txt": save_txt}[fmt](path, self.rec)
-        used_files.add(path)               # set tracking
-        messagebox.showinfo("Saved", f"Saved as {fmt.upper()}")
-
-# --- RUN ---
-root = tk.Tk()
-SurveyApp(root)
-root.mainloop()
+        st.success(f"Your results are saved as {json_filename}")
+        st.download_button("Download your result JSON", json.dumps(record, indent=2), file_name=json_filename)
